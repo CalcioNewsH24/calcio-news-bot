@@ -1,0 +1,35 @@
+name: Pubblica notizie calcio
+
+on:
+  schedule:
+    - cron: "*/20 * * * *"   # ogni 20 minuti
+  workflow_dispatch:          # permette l'avvio manuale da web
+
+permissions:
+  contents: write
+
+jobs:
+  news:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install feedparser requests
+
+      - name: Pubblica le notizie
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHANNEL:   ${{ secrets.CHANNEL }}
+          CI: "true"
+        run: python3 sport_bot.py --once
+
+      - name: Salva lo storico (per non ripubblicare le stesse notizie)
+        run: |
+          git config user.name "news-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add seen.json
+          git diff --cached --quiet || (git commit -m "aggiorna storico notizie" && git push)
