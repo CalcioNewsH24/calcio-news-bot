@@ -39,9 +39,15 @@ FEEDS = {
 CALCIO_KEYS = ["calcio", "calciomercato", "serie a", "serie b", "champions",
                "europa league", "conference", "nazionale", "azzurri",
                "coppa italia", "supercoppa", "premier league", "liga", "bundesliga",
-               "ligue 1", "juve", "juventus", "inter", "milan", "napoli", "roma",
-               "lazio", "fiorentina", "atleta", "attaccante", "difensore",
+               "ligue 1", "atleta", "attaccante", "difensore",
                "centrocampista", "portiere", "allenatore", "arbitro", "fifa", "uefa"]
+
+# Per le fonti GENERALISTE (Sky TG24, Rai) usiamo SOLO parole inequivocabili:
+# i nomi delle squadre (roma, inter, milan...) possono comparire in notizie
+# di cronaca ("Roma: ...") e genererebbero falsi positivi.
+MIXED_KEYS = ["calcio", "calciomercato", "serie a", "serie b", "champions",
+              "europa league", "conference league", "coppa italia",
+              "supercoppa", "premier league", "fifa", "uefa", "azzurri"]
 
 POLL_MINUTES  = 10
 MAX_PER_CYCLE = 5
@@ -81,18 +87,22 @@ def matches(mode, title, summary):
     blob = (title + " " + summary).lower()
     if any(b in blob for b in BLACKLIST):
         return False
-    if mode == "mixed" and not any(k in blob for k in CALCIO_KEYS):
+    def word_match(kw, text):
+        # corrispondenza a PAROLA INTERA: "inter" non fa match con "interagisce"
+        return re.search(r"\b" + re.escape(kw.lower()) + r"\b", text.lower())
+    if mode == "mixed" and not any(word_match(k, title) for k in MIXED_KEYS):
         return False
-    if KEYWORDS_ONLY and not any(k in blob for k in KEYWORDS_ONLY):
+    if KEYWORDS_ONLY and not any(word_match(k, blob) for k in KEYWORDS_ONLY):
         return False
     return True
 
 def collect():
     seen = load_seen()
-    news = []
+    per_source = {}
     for source, cfg in FEEDS.items():
         taken = 0
         d = feedparser.parse(cfg["url"])
+        per_source[source] = []
         for e in d.entries:
             link = e.get("link", "")
             uid  = e.get("id") or link
@@ -104,12 +114,35 @@ def collect():
             summary = clean(e.get("summary", ""))[:220]
             if not title or not matches(cfg["mode"], title, summary):
                 continue
-            news.append({"id": uid, "source": source, "title": title,
-                         "summary": summary, "link": link})
+            per_source[source].append({"id": uid, "source": source, "title": title,
+                                       "summary": summary, "link": link})
             taken += 1
             if taken >= MAX_PER_SOURCE * 3:
                 break
-    return news, seen
+    # ROTAZIONE EQUA: prende a turno una notizia da ogni fonte,
+    # max MAX_PER_SOURCE per fonte, cosi il canale non diventa "solo ANSA".
+    news = []
+    taken_per_source = {s: 0 for s in per_source}
+    while len(news) < MAX_PER_CYCLE * 3:
+        added = False
+        for source, items in per_source.items():
+            if taken_per_source[source] >= MAX_PER_SOURCE or not items:
+                continue
+            news.append(items.pop(0))
+            taken_per_source[source] += 1
+            added = True
+        if not added:
+            break
+    # ANTI-DUPLICATI di titolo: scarta la seconda versione della stessa notizia
+    seen_titles = set()
+    unique = []
+    for n in news:
+        key = re.sub(r"[^a-z0-9 ]", "", n["title"].lower())[:45]
+        if key in seen_titles:
+            continue
+        seen_titles.add(key)
+        unique.append(n)
+    return unique, seen
 
 def format_message(n):
     return (f"⚽ <b>{n['title']}</b>"
